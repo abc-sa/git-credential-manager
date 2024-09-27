@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading.Tasks;
 using GitCredentialManager.Interop.Windows.Native;
 using Microsoft.Identity.Client;
@@ -9,12 +11,12 @@ using Microsoft.Identity.Client.Extensions.Msal;
 using System.Text;
 using System.Threading;
 using GitCredentialManager.UI;
+using GitCredentialManager.UI.Controls;
 using GitCredentialManager.UI.ViewModels;
 using GitCredentialManager.UI.Views;
+using Microsoft.Identity.Client.AppConfig;
 
 #if NETFRAMEWORK
-using System.Drawing;
-using System.Windows.Forms;
 using Microsoft.Identity.Client.Broker;
 #endif
 
@@ -22,8 +24,79 @@ namespace GitCredentialManager.Authentication
 {
     public interface IMicrosoftAuthentication
     {
-        Task<IMicrosoftAuthenticationResult> GetTokenAsync(string authority, string clientId, Uri redirectUri,
-            string[] scopes, string userName);
+        /// <summary>
+        /// Acquire an access token for a user principal.
+        /// </summary>
+        /// <param name="authority">Azure authority.</param>
+        /// <param name="clientId">Client ID.</param>
+        /// <param name="redirectUri">Redirect URI for the client.</param>
+        /// <param name="scopes">Set of scopes to request.</param>
+        /// <param name="userName">Optional user name for an existing account.</param>
+        /// <param name="msaPt">Use MSA-Passthrough behavior when authenticating.</param>
+        /// <returns>Authentication result.</returns>
+        Task<IMicrosoftAuthenticationResult> GetTokenForUserAsync(string authority, string clientId, Uri redirectUri,
+            string[] scopes, string userName, bool msaPt = false);
+
+        /// <summary>
+        /// Acquire an access token for the given service principal with the specified scopes.
+        /// </summary>
+        /// <param name="sp">Service principal identity.</param>
+        /// <param name="scopes">Scopes to request.</param>
+        /// <returns>Authentication result.</returns>
+        Task<IMicrosoftAuthenticationResult> GetTokenForServicePrincipalAsync(ServicePrincipalIdentity sp, string[] scopes);
+
+        /// <summary>
+        /// Acquire a token using the managed identity in the current environment.
+        /// </summary>
+        /// <param name="managedIdentity">Managed identity to use.</param>
+        /// <param name="resource">Resource to obtain an access token for.</param>
+        /// <returns>Authentication result including access token.</returns>
+        /// <remarks>
+        /// There are several formats for the <paramref name="managedIdentity"/> parameter:
+        /// <para/>
+        ///  - <c>"system"</c> - Use the system-assigned managed identity.
+        /// <para/>
+        ///  - <c>"{guid}"</c> - Use the user-assigned managed identity with client ID <c>{guid}</c>.
+        /// <para/>
+        ///  - <c>"id://{guid}"</c> - Use the user-assigned managed identity with client ID <c>{guid}</c>.
+        /// <para/>
+        ///  - <c>"resource://{guid}"</c> - Use the user-assigned managed identity with resource ID <c>{guid}</c>.
+        /// </remarks>
+        Task<IMicrosoftAuthenticationResult> GetTokenForManagedIdentityAsync(string managedIdentity, string resource);
+    }
+
+    public class ServicePrincipalIdentity
+    {
+        /// <summary>
+        /// Client ID of the service principal.
+        /// </summary>
+        public string Id { get; set; }
+
+        /// <summary>
+        /// Tenant ID of the service principal.
+        /// </summary>
+        public string TenantId { get; set; }
+
+        /// <summary>
+        /// Certificate used to authenticate the service principal.
+        /// </summary>
+        /// <remarks>
+        /// If both <see cref="Certificate"/> and <see cref="ClientSecret"/> are set, the certificate will be used.
+        /// </remarks>
+        public X509Certificate2 Certificate { get; set; }
+
+        /// <summary>
+        /// Secret used to authenticate the service principal.
+        /// </summary>
+        /// <remarks>
+        /// If both <see cref="Certificate"/> and <see cref="ClientSecret"/> are set, the certificate will be used.
+        /// </remarks>
+        public string ClientSecret { get; set; }
+
+        /// <summary>
+        /// Whether the authentication should send X5C
+        /// </summary>
+        public bool SendX5C { get; set; }
     }
 
     public interface IMicrosoftAuthenticationResult
@@ -49,28 +122,31 @@ namespace GitCredentialManager.Authentication
             "live", "liveconnect", "liveid",
         };
 
-#if NETFRAMEWORK
-        private DummyWindow _dummyWindow;
-#endif
-
         public MicrosoftAuthentication(ICommandContext context)
             : base(context) { }
 
         #region IMicrosoftAuthentication
 
-        public async Task<IMicrosoftAuthenticationResult> GetTokenAsync(
-            string authority, string clientId, Uri redirectUri, string[] scopes, string userName)
+        public async Task<IMicrosoftAuthenticationResult> GetTokenForUserAsync(
+            string authority, string clientId, Uri redirectUri, string[] scopes, string userName, bool msaPt)
         {
+            var uiCts = new CancellationTokenSource();
+
             // Check if we can and should use OS broker authentication
             bool useBroker = CanUseBroker();
             Context.Trace.WriteLine(useBroker
                 ? "OS broker is available and enabled."
                 : "OS broker is not available or enabled.");
 
+            if (msaPt)
+            {
+                Context.Trace.WriteLine("MSA passthrough is enabled.");
+            }
+
             try
             {
                 // Create the public client application for authentication
-                IPublicClientApplication app = await CreatePublicClientApplicationAsync(authority, clientId, redirectUri, useBroker);
+                IPublicClientApplication app = await CreatePublicClientApplicationAsync(authority, clientId, redirectUri, useBroker, msaPt, uiCts);
 
                 AuthenticationResult result = null;
 
@@ -78,7 +154,7 @@ namespace GitCredentialManager.Authentication
                 bool hasExistingUser = !string.IsNullOrWhiteSpace(userName);
                 if (hasExistingUser)
                 {
-                    result = await GetAccessTokenSilentlyAsync(app, scopes, userName);
+                    result = await GetAccessTokenSilentlyAsync(app, scopes, userName, msaPt);
                 }
 
                 //
@@ -116,7 +192,7 @@ namespace GitCredentialManager.Authentication
                         // account then the user may become stuck in a loop of authentication failures.
                         if (!hasExistingUser && Context.Settings.UseMsAuthDefaultAccount)
                         {
-                            result = await GetAccessTokenSilentlyAsync(app, scopes, null);
+                            result = await GetAccessTokenSilentlyAsync(app, scopes, null, msaPt);
 
                             if (result is null || !await UseDefaultAccountAsync(result.Account.Username))
                             {
@@ -187,10 +263,52 @@ namespace GitCredentialManager.Authentication
             }
             finally
             {
-#if NETFRAMEWORK
-                // If we created a dummy window during authentication we should dispose of it now that we're done
-                _dummyWindow?.Dispose();
-#endif
+                // If we created some global UI (e.g. progress) during authentication we should dismiss them now that we're done
+                uiCts.Cancel();
+            }
+        }
+
+        public async Task<IMicrosoftAuthenticationResult> GetTokenForServicePrincipalAsync(ServicePrincipalIdentity sp, string[] scopes)
+        {
+            IConfidentialClientApplication app = await CreateConfidentialClientApplicationAsync(sp);
+
+            try
+            {
+                Context.Trace.WriteLine($"Sending with X5C: '{sp.SendX5C}'.");
+                AuthenticationResult result = await app.AcquireTokenForClient(scopes).WithSendX5C(sp.SendX5C).ExecuteAsync();;
+
+                return new MsalResult(result);
+            }
+            catch (Exception ex)
+            {
+                Context.Trace.WriteLine($"Failed to acquire token for service principal '{sp.TenantId}/{sp.Id}'.");
+                Context.Trace.WriteException(ex);
+                throw;
+            }
+        }
+
+        public async Task<IMicrosoftAuthenticationResult> GetTokenForManagedIdentityAsync(string managedIdentity, string resource)
+        {
+            var httpFactoryAdaptor = new MsalHttpClientFactoryAdaptor(Context.HttpClientFactory);
+
+            ManagedIdentityId mid = GetManagedIdentity(managedIdentity);
+
+            IManagedIdentityApplication app = ManagedIdentityApplicationBuilder.Create(mid)
+                .WithHttpClientFactory(httpFactoryAdaptor)
+                .Build();
+
+            try
+            {
+                AuthenticationResult result = await app.AcquireTokenForManagedIdentity(resource).ExecuteAsync();
+                return new MsalResult(result);
+            }
+            catch (Exception ex)
+            {
+                Context.Trace.WriteLine(mid == ManagedIdentityId.SystemAssigned
+                    ? "Failed to acquire token for system managed identity."
+                    : $"Failed to acquire token for user managed identity '{managedIdentity:D}'.");
+                Context.Trace.WriteException(ex);
+                throw;
             }
         }
 
@@ -281,23 +399,45 @@ namespace GitCredentialManager.Authentication
         /// <summary>
         /// Obtain an access token without showing UI or prompts.
         /// </summary>
-        private async Task<AuthenticationResult> GetAccessTokenSilentlyAsync(IPublicClientApplication app, string[] scopes, string userName)
+        private async Task<AuthenticationResult> GetAccessTokenSilentlyAsync(
+            IPublicClientApplication app, string[] scopes, string userName, bool msaPt)
         {
             try
             {
                 if (userName is null)
                 {
-                    Context.Trace.WriteLine("Attempting to acquire token silently for current operating system account...");
+                    Context.Trace.WriteLine(
+                        "Attempting to acquire token silently for current operating system account...");
 
-                    return await app.AcquireTokenSilent(scopes, PublicClientApplication.OperatingSystemAccount).ExecuteAsync();
+                    return await app.AcquireTokenSilent(scopes, PublicClientApplication.OperatingSystemAccount)
+                        .ExecuteAsync();
                 }
                 else
                 {
                     Context.Trace.WriteLine($"Attempting to acquire token silently for user '{userName}'...");
 
-                    // We can either call `app.GetAccountsAsync` and filter through the IAccount objects for the instance with the correct user name,
-                    // or we can just pass the user name string we have as the `loginHint` and let MSAL do exactly that for us instead!
-                    return await app.AcquireTokenSilent(scopes, loginHint: userName).ExecuteAsync();
+                    // Enumerate all accounts and find the one matching the user name
+                    IEnumerable<IAccount> accounts = await app.GetAccountsAsync();
+                    IAccount account = accounts.FirstOrDefault(x =>
+                        StringComparer.OrdinalIgnoreCase.Equals(x.Username, userName));
+                    if (account is null)
+                    {
+                        Context.Trace.WriteLine($"No cached account found for user '{userName}'...");
+                        return null;
+                    }
+
+                    var atsBuilder = app.AcquireTokenSilent(scopes, account);
+
+                    // Is we are operating with an MSA passthrough app we need to ensure that we target the
+                    // special MSA 'transfer' tenant explicitly. This is a workaround for MSAL issue:
+                    // https://github.com/AzureAD/microsoft-authentication-library-for-dotnet/issues/3077
+                    if (msaPt && Guid.TryParse(account.HomeAccountId.TenantId, out Guid homeTenantId) &&
+                        homeTenantId == Constants.MsaHomeTenantId)
+                    {
+                        atsBuilder = atsBuilder.WithTenantId(Constants.MsaTransferTenantId.ToString("D"));
+                    }
+
+                    return await atsBuilder.ExecuteAsync();
                 }
             }
             catch (MsalUiRequiredException)
@@ -305,10 +445,16 @@ namespace GitCredentialManager.Authentication
                 Context.Trace.WriteLine("Failed to acquire token silently; user interaction is required.");
                 return null;
             }
+            catch (Exception ex)
+            {
+                Context.Trace.WriteLine("Failed to acquire token silently.");
+                Context.Trace.WriteException(ex);
+                return null;
+            }
         }
 
-        private async Task<IPublicClientApplication> CreatePublicClientApplicationAsync(
-            string authority, string clientId, Uri redirectUri, bool enableBroker)
+        private async Task<IPublicClientApplication> CreatePublicClientApplicationAsync(string authority,
+            string clientId, Uri redirectUri, bool enableBroker, bool msaPt, CancellationTokenSource uiCts)
         {
             var httpFactoryAdaptor = new MsalHttpClientFactoryAdaptor(Context.HttpClientFactory);
 
@@ -351,11 +497,8 @@ namespace GitCredentialManager.Authentication
                     }
                     else if (enableBroker) // Only actually need to set a parent window when using the Windows broker
                     {
-#if NETFRAMEWORK
-                        Context.Trace.WriteLine($"Using dummy parent window for MSAL authentication dialogs.");
-                        _dummyWindow = new DummyWindow();
-                        appBuilder.WithParentActivityOrWindow(_dummyWindow.ShowAndGetHandle);
-#endif
+                        Context.Trace.WriteLine("Using progress parent window for MSAL authentication dialogs.");
+                        appBuilder.WithParentActivityOrWindow(() => ProgressWindow.ShowAndGetHandle(uiCts.Token));
                     }
                 }
             }
@@ -370,7 +513,7 @@ namespace GitCredentialManager.Authentication
                     new BrokerOptions(BrokerOptions.OperatingSystems.Windows)
                     {
                         Title = "Git Credential Manager",
-                        MsaPassthrough = true,
+                        MsaPassthrough = msaPt,
                     }
                 );
 #endif
@@ -378,8 +521,39 @@ namespace GitCredentialManager.Authentication
 
             IPublicClientApplication app = appBuilder.Build();
 
-            // Register the application token cache
-            await RegisterTokenCacheAsync(app, Context.Trace2);
+            // Register the user token cache
+            await RegisterTokenCacheAsync(app.UserTokenCache, CreateUserTokenCacheProps, Context.Trace2);
+
+            return app;
+        }
+
+        private async Task<IConfidentialClientApplication> CreateConfidentialClientApplicationAsync(ServicePrincipalIdentity sp)
+        {
+            var httpFactoryAdaptor = new MsalHttpClientFactoryAdaptor(Context.HttpClientFactory);
+
+            Context.Trace.WriteLine($"Creating confidential client application for {sp.TenantId}/{sp.Id}...");
+            var appBuilder = ConfidentialClientApplicationBuilder.Create(sp.Id)
+                .WithTenantId(sp.TenantId)
+                .WithHttpClientFactory(httpFactoryAdaptor);
+
+            if (sp.Certificate is not null)
+            {
+                Context.Trace.WriteLineSecrets("Using certificate with thumbprint: '{0}'", new object[] { sp.Certificate.Thumbprint });
+                appBuilder = appBuilder.WithCertificate(sp.Certificate);
+            }
+            else if (!string.IsNullOrWhiteSpace(sp.ClientSecret))
+            {
+                Context.Trace.WriteLineSecrets("Using client secret: '{0}'", new object[] { sp.ClientSecret });
+                appBuilder = appBuilder.WithClientSecret(sp.ClientSecret);
+            }
+            else
+            {
+                throw new InvalidOperationException("Service principal identity does not contain a certificate or client secret.");
+            }
+
+            IConfidentialClientApplication app = appBuilder.Build();
+
+            await RegisterTokenCacheAsync(app.AppTokenCache, CreateAppTokenCacheProps, Context.Trace2);
 
             return app;
         }
@@ -388,10 +562,11 @@ namespace GitCredentialManager.Authentication
 
         #region Helpers
 
-        private async Task RegisterTokenCacheAsync(IPublicClientApplication app, ITrace2 trace2)
+        private delegate StorageCreationProperties StoragePropertiesBuilder(bool useLinuxFallback);
+
+        private async Task RegisterTokenCacheAsync(ITokenCache cache, StoragePropertiesBuilder propsBuilder, ITrace2 trace2)
         {
-            Context.Trace.WriteLine(
-                "Configuring Microsoft Authentication token cache to instance shared with Microsoft developer tools...");
+            Context.Trace.WriteLine("Configuring MSAL token cache...");
 
             if (!PlatformUtils.IsWindows() && !PlatformUtils.IsPosix())
             {
@@ -401,11 +576,11 @@ namespace GitCredentialManager.Authentication
             }
 
             // We use the MSAL extension library to provide us consistent cache file access semantics (synchronisation, etc)
-            // as other Microsoft developer tools such as the Azure PowerShell CLI.
+            // as other GCM processes, and other Microsoft developer tools such as the Azure PowerShell CLI.
             MsalCacheHelper helper = null;
             try
             {
-                var storageProps = CreateTokenCacheProps(useLinuxFallback: false);
+                StorageCreationProperties storageProps = propsBuilder(useLinuxFallback: false);
                 helper = await MsalCacheHelper.CreateAsync(storageProps);
 
                 // Test that cache access is working correctly
@@ -433,24 +608,31 @@ namespace GitCredentialManager.Authentication
                     // On Linux the SecretService/keyring might not be available so we must fall-back to a plaintext file.
                     Context.Streams.Error.WriteLine("warning: using plain-text fallback token cache");
                     Context.Trace.WriteLine("Using fall-back plaintext token cache on Linux.");
-                    var storageProps = CreateTokenCacheProps(useLinuxFallback: true);
+                    StorageCreationProperties storageProps = propsBuilder(useLinuxFallback: true);
                     helper = await MsalCacheHelper.CreateAsync(storageProps);
                 }
             }
 
             if (helper is null)
             {
-                Context.Streams.Error.WriteLine("error: failed to set up Microsoft Authentication token cache!");
-                Context.Trace.WriteLine("Failed to integrate with shared token cache!");
+                Context.Streams.Error.WriteLine("error: failed to set up token cache!");
+                Context.Trace.WriteLine("Failed to integrate with token cache!");
             }
             else
             {
-                helper.RegisterCache(app.UserTokenCache);
-                Context.Trace.WriteLine("Microsoft developer tools token cache configured.");
+                helper.RegisterCache(cache);
+                Context.Trace.WriteLine("Token cache configured.");
             }
         }
 
-        internal StorageCreationProperties CreateTokenCacheProps(bool useLinuxFallback)
+        /// <summary>
+        /// Create the properties for the user token cache. This is used by public client applications only.
+        /// This cache is shared between GCM processes, and also other Microsoft developer tools such as the Azure
+        /// PowerShell CLI.
+        /// </summary>
+        /// <param name="useLinuxFallback"></param>
+        /// <returns></returns>
+        internal StorageCreationProperties CreateUserTokenCacheProps(bool useLinuxFallback)
         {
             const string cacheFileName = "msal.cache";
             string cacheDirectory;
@@ -483,6 +665,82 @@ namespace GitCredentialManager.Authentication
                     "default", "MSALCache",
                     new KeyValuePair<string, string>("MsalClientID", "Microsoft.Developer.IdentityService"),
                     new KeyValuePair<string, string>("Microsoft.Developer.IdentityService", "1.0.0.0"));
+            }
+
+            return builder.Build();
+        }
+
+        internal static ManagedIdentityId GetManagedIdentity(string str)
+        {
+            // An empty string or "system" means system-assigned managed identity
+            if (string.IsNullOrWhiteSpace(str) || str.Equals("system", StringComparison.OrdinalIgnoreCase))
+            {
+                return ManagedIdentityId.SystemAssigned;
+            }
+
+            //
+            // A GUID-looking value means a user-assigned managed identity specified by the client ID.
+            // If the "{value}" is the empty GUID then we use the system-assigned MI.
+            //
+            if (Guid.TryParse(str, out Guid guid))
+            {
+                return guid == Guid.Empty
+                    ? ManagedIdentityId.SystemAssigned
+                    : ManagedIdentityId.WithUserAssignedClientId(str);
+            }
+
+            //
+            // A value of the form "id://{value}" means a user-assigned managed identity specified by the client ID.
+            // If the "{value}" is the empty GUID then we use the system-assigned MI.
+            //
+            // If the value is "resource://{value}" then it is a user-assigned managed identity specified
+            // by the resource ID.
+            //
+            if (Uri.TryCreate(str, UriKind.Absolute, out Uri uri))
+            {
+                if (StringComparer.OrdinalIgnoreCase.Equals(uri.Scheme, "id"))
+                {
+                    return Guid.TryParse(uri.Host, out Guid g) && g == Guid.Empty
+                        ? ManagedIdentityId.SystemAssigned
+                        : ManagedIdentityId.WithUserAssignedClientId(uri.Host);
+                }
+
+                if (StringComparer.OrdinalIgnoreCase.Equals(uri.Scheme, "resource"))
+                {
+                    return ManagedIdentityId.WithUserAssignedResourceId(uri.Host);
+                }
+            }
+
+            throw new ArgumentException("Invalid managed identity value.", nameof(str));
+        }
+
+        /// <summary>
+        /// Create the properties for the application token cache. This is used by confidential client applications only
+        /// and is not shared between applications other than GCM.
+        /// </summary>
+        internal StorageCreationProperties CreateAppTokenCacheProps(bool useLinuxFallback)
+        {
+            const string cacheFileName = "app.cache";
+
+            // The confidential client MSAL cache is located at "%UserProfile%\.gcm\msal\app.cache" on Windows
+            // and at "~/.gcm/msal/app.cache" on UNIX.
+            string cacheDirectory = Path.Combine(Context.FileSystem.UserDataDirectoryPath, "msal");
+
+            // The keychain is used on macOS with the following service & account names
+            var builder = new StorageCreationPropertiesBuilder(cacheFileName, cacheDirectory)
+                .WithMacKeyChain("GitCredentialManager.MSAL", "AppCache");
+
+            if (useLinuxFallback)
+            {
+                builder.WithLinuxUnprotectedFile();
+            }
+            else
+            {
+                // The SecretService/keyring is used on Linux with the following collection name and attributes
+                builder.WithLinuxKeyring(cacheFileName,
+                    "default", "AppCache",
+                    new KeyValuePair<string, string>("MsalClientID", "GitCredentialManager.MSAL"),
+                    new KeyValuePair<string, string>("GitCredentialManager.MSAL", "1.0.0.0"));
             }
 
             return builder.Build();
@@ -638,75 +896,7 @@ namespace GitCredentialManager.Authentication
             }
 
             public string AccessToken => _msalResult.AccessToken;
-            public string AccountUpn => _msalResult.Account.Username;
+            public string AccountUpn => _msalResult.Account?.Username;
         }
-
-#if NETFRAMEWORK
-        private class DummyWindow : IDisposable
-        {
-            private readonly Thread _staThread;
-            private readonly ManualResetEventSlim _readyEvent;
-            private Form _window;
-            private IntPtr _handle;
-
-            public DummyWindow()
-            {
-                _staThread = new Thread(ThreadProc);
-                _staThread.SetApartmentState(ApartmentState.STA);
-                _readyEvent = new ManualResetEventSlim();
-            }
-
-            public IntPtr ShowAndGetHandle()
-            {
-                _staThread.Start();
-                _readyEvent.Wait();
-                return _handle;
-            }
-
-            public void Dispose()
-            {
-                _window?.Invoke(() => _window.Close());
-
-                if (_staThread.IsAlive)
-                {
-                    _staThread.Join();
-                }
-            }
-
-            private void ThreadProc()
-            {
-                System.Windows.Forms.Application.EnableVisualStyles();
-                _window = new Form
-                {
-                    TopMost = true,
-                    ControlBox = false,
-                    MaximizeBox = false,
-                    MinimizeBox = false,
-                    ClientSize = new Size(182, 46),
-                    FormBorderStyle = FormBorderStyle.None,
-                    StartPosition = FormStartPosition.CenterScreen,
-                };
-
-                var progress = new ProgressBar
-                {
-                    Style = ProgressBarStyle.Marquee,
-                    Location = new Point(12, 12),
-                    Size = new Size(158, 23),
-                    MarqueeAnimationSpeed = 30,
-                };
-
-                _window.Controls.Add(progress);
-                _window.Shown += (s, e) =>
-                {
-                    _handle = _window.Handle;
-                    _readyEvent.Set();
-                };
-
-                _window.ShowDialog();
-                _window.Dispose();
-                _window = null;
-            }
-        }
-#endif
     }
 }

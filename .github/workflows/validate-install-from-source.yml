@@ -1,6 +1,7 @@
 name: validate-install-from-source
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -14,7 +15,7 @@ jobs:
       matrix:
         vector:
         - image: ubuntu
-        - image: debian
+        - image: debian:bullseye
         - image: fedora
         # Centos no longer officially maintains images on Docker Hub. However,
         # tgagor is a contributor who pushes updated images weekly, which should
@@ -23,10 +24,10 @@ jobs:
         - image: tgagor/centos-stream
         - image: redhat/ubi8
         - image: alpine
+        - image: alpine:3.14.10
         - image: opensuse/leap
         - image: opensuse/tumbleweed
         - image: registry.suse.com/suse/sle15:15.4.27.11.31
-        - image: archlinux
     container: ${{matrix.vector.image}}
     steps:
       - run: |
@@ -36,7 +37,7 @@ jobs:
             dnf install which -y
           fi
 
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - run: |
           sh "${GITHUB_WORKSPACE}/src/linux/Packaging.Linux/install-from-source.sh" -y

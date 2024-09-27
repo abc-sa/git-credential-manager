@@ -272,6 +272,36 @@ Defaults to enabled.
 
 ---
 
+### GCM_GUI_SOFTWARE_RENDERING
+
+Force the use of software rendering for GUI prompts.
+
+This is currently only applicable on Windows.
+
+#### Example
+
+##### Windows
+
+```batch
+SET GCM_GUI_SOFTWARE_RENDERING=1
+```
+
+##### macOS/Linux
+
+```bash
+export GCM_GUI_SOFTWARE_RENDERING=1
+```
+
+Defaults to false (use hardware acceleration where available).
+
+> [!NOTE]
+> Windows on ARM devices defaults to using software rendering to work around a
+> known Avalonia issue: <https://github.com/AvaloniaUI/Avalonia/issues/10405>
+
+**Also see: [credential.guiSoftwareRendering][credential-guisoftwarerendering]**
+
+---
+
 ### GCM_AUTODETECT_TIMEOUT
 
 Set the maximum length of time, in milliseconds, that GCM should wait for a
@@ -522,6 +552,33 @@ export GCM_BITBUCKET_DATACENTER_CLIENTSECRET=222222222222222222222
 Defaults to undefined.
 
 **Also see: [credential.bitbucketDataCenterOAuthClientSecret](configuration.md#credentialbitbucketDataCenterOAuthClientSecret)**
+
+---
+
+### GCM_GITHUB_ACCOUNTFILTERING
+
+Enable or disable automatic account filtering for GitHub based on server hints
+when there are multiple available accounts. This setting is only applicable to
+GitHub.com with [Enterprise Managed Users][github-emu].
+
+Value|Description
+-|-
+`true` _(default)_|Filter available accounts based on server hints.
+`false`|Show all available accounts.
+
+#### Windows
+
+```batch
+SET GCM_GITHUB_ACCOUNTFILTERING=false
+```
+
+#### macOS/Linux
+
+```bash
+export GCM_GITHUB_ACCOUNTFILTERING=false
+```
+
+**Also see: [credential.gitHubAccountFiltering][credential-githubaccountfiltering]**
 
 ---
 
@@ -867,6 +924,147 @@ export GCM_AZREPOS_CREDENTIALTYPE="oauth"
 
 ---
 
+### GCM_AZREPOS_MANAGEDIDENTITY
+
+Use a [Managed Identity][managed-identity] to authenticate with Azure Repos.
+
+The value `system` will tell GCM to use the system-assigned Managed Identity.
+
+To specify a user-assigned Managed Identity, use the format `id://{clientId}`
+where `{clientId}` is the client ID of the Managed Identity. Alternatively any
+GUID-like value will also be interpreted as a user-assigned Managed Identity
+client ID.
+
+To specify a Managed Identity associated with an Azure resource, you can use the
+format `resource://{resourceId}` where `{resourceId}` is the ID of the resource.
+
+For more information about managed identities, see the Azure DevOps
+[documentation][azrepos-sp-mid].
+
+Value|Description
+-|-
+`system`|System-Assigned Managed Identity
+`[guid]`|User-Assigned Managed Identity with the specified client ID
+`id://[guid]`|User-Assigned Managed Identity with the specified client ID
+`resource://[guid]`|User-Assigned Managed Identity for the associated resource
+
+#### Windows
+
+```batch
+SET GCM_AZREPOS_MANAGEDIDENTITY="id://11111111-1111-1111-1111-111111111111"
+```
+
+#### macOS/Linux
+
+```bash
+export GCM_AZREPOS_MANAGEDIDENTITY="id://11111111-1111-1111-1111-111111111111"
+```
+
+**Also see: [credential.azreposManagedIdentity][credential-azrepos-managedidentity]**
+
+---
+
+### GCM_AZREPOS_SERVICE_PRINCIPAL
+
+Specify the client and tenant IDs of a [service principal][service-principal]
+to use when performing Microsoft authentication for Azure Repos.
+
+The value of this setting should be in the format: `{tenantId}/{clientId}`.
+
+You must also set at least one authentication mechanism if you set this value:
+
+- [GCM_AZREPOS_SP_SECRET][gcm-azrepos-sp-secret]
+- [GCM_AZREPOS_SP_CERT_THUMBPRINT][gcm-azrepos-sp-cert-thumbprint]
+
+For more information about service principals, see the Azure DevOps
+[documentation][azrepos-sp-mid].
+
+#### Windows
+
+```batch
+SET GCM_AZREPOS_SERVICE_PRINCIPAL="11111111-1111-1111-1111-111111111111/22222222-2222-2222-2222-222222222222"
+```
+
+#### macOS/Linux
+
+```bash
+export GCM_AZREPOS_SERVICE_PRINCIPAL="11111111-1111-1111-1111-111111111111/22222222-2222-2222-2222-222222222222"
+```
+
+**Also see: [credential.azreposServicePrincipal][credential-azrepos-sp]**
+
+---
+
+### GCM_AZREPOS_SP_SECRET
+
+Specifies the client secret for the [service principal][service-principal] when
+performing Microsoft authentication for Azure Repos with
+[GCM_AZREPOS_SERVICE_PRINCIPAL][gcm-azrepos-sp] set.
+
+#### Windows
+
+```batch
+SET GCM_AZREPOS_SP_SECRET="da39a3ee5e6b4b0d3255bfef95601890afd80709"
+```
+
+#### macOS/Linux
+
+```bash
+export GCM_AZREPOS_SP_SECRET="da39a3ee5e6b4b0d3255bfef95601890afd80709"
+```
+
+**Also see: [credential.azreposServicePrincipalSecret][credential-azrepos-sp-secret]**
+
+---
+
+### GCM_AZREPOS_SP_CERT_THUMBPRINT
+
+Specifies the thumbprint of a certificate to use when authenticating as a
+[service principal][service-principal] for Azure Repos when
+[GCM_AZREPOS_SERVICE_PRINCIPAL][gcm-azrepos-sp] is set.
+
+#### Windows
+
+```batch
+SET GCM_AZREPOS_SP_CERT_THUMBPRINT="9b6555292e4ea21cbc2ebd23e66e2f91ebbe92dc"
+```
+
+#### macOS/Linux
+
+```bash
+export GCM_AZREPOS_SP_CERT_THUMBPRINT="9b6555292e4ea21cbc2ebd23e66e2f91ebbe92dc"
+```
+
+**Also see: [credential.azreposServicePrincipalCertificateThumbprint][credential-azrepos-sp-cert-thumbprint]**
+
+---
+
+### GCM_AZREPOS_SP_CERT_SEND_X5C
+
+When using a certificate for service principal authentication, this configuration
+specifies whether the X5C claim should be should be sent to the STS. Sending the x5c
+enables application developers to achieve easy certificate rollover in Azure AD:
+this method will send the public certificate to Azure AD along with the token request,
+so that Azure AD can use it to validate the subject name based on a trusted issuer
+policy. This saves the application admin from the need to explicitly manage the
+certificate rollover. For details see [https://aka.ms/msal-net-sni](https://aka.ms/msal-net-sni).
+
+#### Windows
+
+```batch
+SET GCM_AZREPOS_SP_CERT_SEND_X5C="true"
+```
+
+#### macOS/Linux
+
+```bash
+export GCM_AZREPOS_SP_CERT_SEND_X5C="true"
+```
+
+**Also see: [credential.azreposServicePrincipalCertificateSendX5C][credential-azrepos-sp-cert-x5c]**
+
+---
+
 ### GIT_TRACE2
 
 Turns on Trace2 Normal Format tracing - see [Git's Trace2 Normal Format
@@ -958,15 +1156,18 @@ Defaults to disabled.
 [credential-allowwindowsauth]: environment.md#credentialallowWindowsAuth
 [credential-authority]: configuration.md#credentialauthority-deprecated
 [credential-autodetecttimeout]: configuration.md#credentialautodetecttimeout
-[credential-azrepos-credential-type]: configuration.md#azreposcredentialtype
+[credential-azrepos-credential-type]: configuration.md#credentialazreposcredentialtype
+[credential-azrepos-managedidentity]: configuration.md#credentialazreposmanagedidentity
 [credential-bitbucketauthmodes]: configuration.md#credentialbitbucketAuthModes
 [credential-cacheoptions]: configuration.md#credentialcacheoptions
 [credential-credentialstore]: configuration.md#credentialcredentialstore
 [credential-debug]: configuration.md#credentialdebug
 [credential-dpapi-store-path]: configuration.md#credentialdpapistorepath
+[credential-githubaccountfiltering]: configuration.md#credentialgitHubAccountFiltering
 [credential-githubauthmodes]: configuration.md#credentialgitHubAuthModes
 [credential-gitlabauthmodes]: configuration.md#credentialgitLabAuthModes
 [credential-guiprompt]: configuration.md#credentialguiprompt
+[credential-guisoftwarerendering]: configuration.md#credentialguisoftwarerendering
 [credential-httpproxy]: configuration.md#credentialhttpProxy-deprecated
 [credential-interactive]: configuration.md#credentialinteractive
 [credential-namespace]: configuration.md#credentialnamespace
@@ -991,8 +1192,10 @@ Defaults to disabled.
 [git-cache-options]: https://git-scm.com/docs/git-credential-cache#_options
 [git-credential-cache]: https://git-scm.com/docs/git-credential-cache
 [git-httpproxy]: https://git-scm.com/docs/git-config#Documentation/git-config.txt-httpproxy
+[github-emu]: https://docs.github.com/en/enterprise-cloud@latest/admin/identity-and-access-management/using-enterprise-managed-users-for-iam/about-enterprise-managed-users
 [network-http-proxy]: netconfig.md#http-proxy
 [libsecret]: https://wiki.gnome.org/Projects/Libsecret
+[managed-identity]: https://docs.microsoft.com/en-us/azure/active-directory/managed-identities-azure-resources/overview
 [migration-guide]: migration.md#gcm_authority
 [passwordstore]: https://www.passwordstore.org/
 [trace2-normal-docs]: https://git-scm.com/docs/api-trace2#_the_normal_format_target
@@ -1002,3 +1205,13 @@ Defaults to disabled.
 [trace2-performance-docs]: https://git-scm.com/docs/api-trace2#_the_performance_format_target
 [trace2-performance-config]: configuration.md#trace2perfTarget
 [windows-broker]: windows-broker.md
+[service-principal]: https://docs.microsoft.com/en-us/azure/active-directory/develop/app-objects-and-service-principals
+[azrepos-sp-mid]: https://learn.microsoft.com/en-us/azure/devops/integrate/get-started/authentication/service-principal-managed-identity
+[gcm-azrepos-sp]: #gcm_azrepos_service_principal
+[gcm-azrepos-sp-secret]: #gcm_azrepos_sp_secret
+[gcm-azrepos-sp-cert-thumbprint]: #gcm_azrepos_sp_cert_thumbprint
+[gcm-azrepos-sp-cert-x5c]: #gcm_azrepos_sp_cert_send_x5c
+[credential-azrepos-sp]: configuration.md#credentialazreposserviceprincipal
+[credential-azrepos-sp-secret]: configuration.md#credentialazreposserviceprincipalsecret
+[credential-azrepos-sp-cert-thumbprint]: configuration.md#credentialazreposserviceprincipalcertificatethumbprint
+[credential-azrepos-sp-cert-x5c]: configuration.md#credentialazreposserviceprincipalcertificatesendx5c

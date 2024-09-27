@@ -18,6 +18,17 @@ namespace GitCredentialManager
 
         public static readonly Guid DevBoxPartnerId = new("e3171dd9-9a5f-e5be-b36c-cc7c4f3f3bcf");
 
+        /// <summary>
+        /// Home tenant ID for Microsoft Accounts (MSA).
+        /// </summary>
+        public static readonly Guid MsaHomeTenantId = new("9188040d-6c67-4c5b-b112-36a304b66dad");
+
+        /// <summary>
+        /// Special tenant ID for transferring between Microsoft Account (MSA) native tokens
+        /// and AAD tokens. Only required for MSA-Passthrough applications.
+        /// </summary>
+        public static readonly Guid MsaTransferTenantId = new("f8cdef31-a31e-4b4a-93e4-5f571e91255a");
+
         public static class CredentialStoreNames
         {
             public const string WindowsCredentialManager = "wincredman";
@@ -107,6 +118,7 @@ namespace GitCredentialManager
             public const string OAuthClientAuthHeader    = "GCM_OAUTH_USE_CLIENT_AUTH_HEADER";
             public const string OAuthDefaultUserName     = "GCM_OAUTH_DEFAULT_USERNAME";
             public const string GcmDevUseLegacyUiHelpers = "GCM_DEV_USELEGACYUIHELPERS";
+            public const string GcmGuiSoftwareRendering  = "GCM_GUI_SOFTWARE_RENDERING";
         }
 
         public static class Http
@@ -149,6 +161,7 @@ namespace GitCredentialManager
                 public const string UiHelper = "uiHelper";
                 public const string DevUseLegacyUiHelpers = "devUseLegacyUiHelpers";
                 public const string MsAuthUseDefaultAccount = "msauthUseDefaultAccount";
+                public const string GuiSoftwareRendering = "guiSoftwareRendering";
 
                 public const string OAuthAuthenticationModes = "oauthAuthModes";
                 public const string OAuthClientId            = "oauthClientId";
@@ -210,7 +223,6 @@ namespace GitCredentialManager
             public const string GcmCredentialStores    = "https://aka.ms/gcm/credstores";
             public const string GcmWamComSecurity      = "https://aka.ms/gcm/wamadmin";
             public const string GcmAutoDetect          = "https://aka.ms/gcm/autodetect";
-            public const string GcmExecRename          = "https://aka.ms/gcm/rename";
             public const string GcmDefaultAccount      = "https://aka.ms/gcm/defaultaccount";
             public const string GcmMultipleUsers       = "https://aka.ms/gcm/multipleusers";
         }

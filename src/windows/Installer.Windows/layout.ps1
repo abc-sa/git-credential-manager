@@ -8,10 +8,6 @@ $THISDIR = $pwd.path
 $ROOT = (Get-Item $THISDIR).parent.parent.parent.FullName
 $SRC = "$ROOT/src"
 $GCM_SRC = "$SRC/shared/Git-Credential-Manager"
-$GCM_UI_SRC = "$SRC/windows/Git-Credential-Manager.UI.Windows"
-$BITBUCKET_UI_SRC = "$SRC/windows/Atlassian.Bitbucket.UI.Windows"
-$GITHUB_UI_SRC = "$SRC/windows/GitHub.UI.Windows"
-$GITLAB_UI_SRC = "$SRC/windows/GitLab.UI.Windows"
 
 # Perform pre-execution checks
 $PAYLOAD = "$OUTPUT"
@@ -45,33 +41,6 @@ dotnet publish "$GCM_SRC" `
 	--configuration "$CONFIGURATION" `
 	--runtime win-x86 `
 	--output "$PAYLOAD"
-
-Write-Output "Publishing core UI helper..."
-dotnet publish "$GCM_UI_SRC" `
-	--configuration "$CONFIGURATION" `
-	--output "$PAYLOAD"
-
-Write-Output "Publishing Bitbucket UI helper..."
-dotnet publish "$BITBUCKET_UI_SRC" `
-	--configuration "$CONFIGURATION" `
-	--output "$PAYLOAD" 
-
-Write-Output "Publishing GitHub UI helper..."
-dotnet publish "$GITHUB_UI_SRC" `
-	--configuration "$CONFIGURATION" `
-	--output "$PAYLOAD" 
-
-Write-Output "Publishing GitLab UI helper..."
-dotnet publish "$GITLAB_UI_SRC" `
-	--configuration "$CONFIGURATION" `
-	--output "$PAYLOAD" 
-
-# Create copy of main GCM executable with older "GCM Core" name
-Copy-Item -Path "$PAYLOAD/git-credential-manager.exe" `
-	-Destination "$PAYLOAD/git-credential-manager-core.exe"
-
-Copy-Item -Path "$PAYLOAD/git-credential-manager.exe.config" `
-	-Destination "$PAYLOAD/git-credential-manager-core.exe.config"
 
 # Delete libraries that are not needed for Windows but find their way
 # into the publish output.
